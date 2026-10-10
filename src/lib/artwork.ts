@@ -52,13 +52,26 @@ function sanitize(el: Element) {
   }
 }
 
+export async function loadArtwork(file: File): Promise<Artwork> {
+  return parseArtwork(await file.text(), file.name);
+}
+
 /**
- * Parses an SVG file, strips anything active, and flattens all styling to a
+ * Rebuilds an artwork from previously saved markup. The markup goes through
+ * the full sanitize/recolor pass again, since project files can come from anywhere.
+ */
+export function restoreArtwork(name: string, markup: string, mmPerUnit: number): Artwork {
+  const svg = `<svg xmlns="${SVG_NS}" xmlns:xlink="http://www.w3.org/1999/xlink">${markup}</svg>`;
+  return { ...parseArtwork(svg, name), mmPerUnit };
+}
+
+/**
+ * Parses SVG source, strips anything active, and flattens all styling to a
  * single laser layer colour (fills stay fills, strokes stay strokes).
  * Needs a live DOM: computed styles and getBBox only work on rendered nodes.
  */
-export async function loadArtwork(file: File): Promise<Artwork> {
-  const doc = new DOMParser().parseFromString(await file.text(), 'image/svg+xml');
+export function parseArtwork(source: string, name: string): Artwork {
+  const doc = new DOMParser().parseFromString(source, 'image/svg+xml');
   const parsed = doc.documentElement;
   if (doc.querySelector('parsererror') || parsed.localName !== 'svg') throw new Error('Not a valid SVG file.');
   sanitize(parsed);
@@ -111,7 +124,7 @@ export async function loadArtwork(file: File): Promise<Artwork> {
       .join('');
 
     return {
-      name: file.name,
+      name,
       markup,
       bbox: { x: box.x, y: box.y, width: box.width, height: box.height },
       mmPerUnit,

@@ -3,27 +3,27 @@ import { Box3D } from './components/Box3D';
 import { SheetPreview } from './components/SheetPreview';
 import { buildPanels, fingerCount, frontHeight, lidLayout, validate, type BoxParams, type LidParams } from './lib/geometry';
 import { fmt, layoutParts, type SheetSpec } from './lib/layout';
-import { downloadSvg, sheetToSvg, type PlacedArt } from './lib/svg';
+import { downloadFile, downloadSvg, sheetToSvg, type PlacedArt } from './lib/svg';
+import {
+  DEFAULT_PROJECT,
+  SHEET_PRESETS,
+  parseProject,
+  serializeProject,
+  type ProjectState,
+} from './lib/project';
 import {
   artHeight,
   artOutOfBounds,
   artTransform,
   fitWidth,
   loadArtwork,
+  restoreArtwork,
   type ArtPlacement,
   type Artwork,
 } from './lib/artwork';
 
 /** Margin kept around the artwork when fitting it to the lid. */
 const ART_FIT_MARGIN = 3;
-
-const SHEET_PRESETS: Record<string, [number, number]> = {
-  A4: [297, 210],
-  A3: [420, 297],
-  A2: [594, 420],
-  '600 × 400': [600, 400],
-  '300 × 300': [300, 300],
-};
 
 function NumField({
   label,
@@ -71,25 +71,25 @@ function NumField({
 }
 
 export default function App() {
-  const [box, setBox] = useState<Omit<BoxParams, 'lid'>>({
-    width: 150,
-    depth: 100,
-    height: 80,
-    thickness: 3,
-    fingerWidth: 10,
+  const d = DEFAULT_PROJECT;
+  const [box, setBox] = useState<Omit<BoxParams, 'lid'>>(d.box);
+  const [lidEnabled, setLidEnabled] = useState(d.lid.enabled);
+  const [lidParams, setLidParams] = useState<LidParams>({
+    grooveDepth: d.lid.grooveDepth,
+    lip: d.lid.lip,
+    clearance: d.lid.clearance,
   });
-  const [lidEnabled, setLidEnabled] = useState(false);
-  const [lidParams, setLidParams] = useState<LidParams>({ grooveDepth: 1.3, lip: 3, clearance: 0.2 });
-  const [kerf, setKerf] = useState(0);
-  const [preset, setPreset] = useState('A3');
-  const [portrait, setPortrait] = useState(false);
-  const [custom, setCustom] = useState<[number, number]>([420, 297]);
-  const [margin, setMargin] = useState(5);
-  const [gap, setGap] = useState(3);
+  const [kerf, setKerf] = useState(d.kerf);
+  const [preset, setPreset] = useState(d.sheet.preset);
+  const [portrait, setPortrait] = useState(d.sheet.portrait);
+  const [custom, setCustom] = useState<[number, number]>(d.sheet.custom);
+  const [margin, setMargin] = useState(d.sheet.margin);
+  const [gap, setGap] = useState(d.sheet.gap);
   const [explode, setExplode] = useState(0);
   const [art, setArt] = useState<Artwork | null>(null);
   const [artError, setArtError] = useState<string | null>(null);
   const [placement, setPlacement] = useState<ArtPlacement>({ width: 50, offsetX: 0, offsetY: 0, rotation: 0 });
+  const [projectError, setProjectError] = useState<string | null>(null);
 
   const params: BoxParams = useMemo(
     () => ({ ...box, lid: lidEnabled ? lidParams : null }),
@@ -147,10 +147,53 @@ export default function App() {
     }
   };
 
+  const currentProject = (): ProjectState => ({
+    box,
+    kerf,
+    lid: { enabled: lidEnabled, ...lidParams },
+    sheet: { preset, portrait, custom, margin, gap },
+    artwork: art ? { name: art.name, markup: art.markup, mmPerUnit: art.mmPerUnit, placement } : null,
+  });
+
+  const applyProject = (p: ProjectState) => {
+    setBox(p.box);
+    setKerf(p.kerf);
+    setLidEnabled(p.lid.enabled);
+    setLidParams({ grooveDepth: p.lid.grooveDepth, lip: p.lid.lip, clearance: p.lid.clearance });
+    setPreset(p.sheet.preset);
+    setPortrait(p.sheet.portrait);
+    setCustom(p.sheet.custom);
+    setMargin(p.sheet.margin);
+    setGap(p.sheet.gap);
+    setArtError(null);
+    setArt(null);
+    if (p.artwork) {
+      try {
+        setArt(restoreArtwork(p.artwork.name, p.artwork.markup, p.artwork.mmPerUnit));
+        setPlacement(p.artwork.placement);
+      } catch (e) {
+        setArtError(`Lid drawing could not be restored: ${e instanceof Error ? e.message : 'invalid SVG'}`);
+      }
+    }
+  };
+
+  const onProjectFile = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      applyProject(parseProject(await file.text()));
+      setProjectError(null);
+    } catch (e) {
+      setProjectError(e instanceof Error ? e.message : 'Could not read the project.');
+    }
+  };
+
+  const baseName = `box-${fmt(box.width)}x${fmt(box.depth)}x${fmt(box.height)}`;
+  const saveProject = () => downloadFile(serializeProject(currentProject()), `${baseName}.json`, 'application/json');
+
   const svgFor = (i: number) => sheetToSvg(layout.sheets[i], spec, params.lid?.grooveDepth, placedArt);
 
   const filename = (i: number) =>
-    `box-${fmt(params.width)}x${fmt(params.depth)}x${fmt(params.height)}-t${fmt(t)}` +
+    `${baseName}-t${fmt(t)}` +
     (params.lid ? '-lid' : '') +
     (layout.sheets.length > 1 ? `-sheet${i + 1}` : '') +
     '.svg';
@@ -163,6 +206,23 @@ export default function App() {
       <aside className="panel">
         <h1>Finger-joint box</h1>
         <p className="lede">Outside dimensions, in millimetres.</p>
+
+        <div className="buttons project">
+          <label className="button">
+            Open project…
+            <input
+              type="file"
+              accept=".json,application/json"
+              hidden
+              onChange={(e) => {
+                onProjectFile(e.target.files?.[0]);
+                e.target.value = '';
+              }}
+            />
+          </label>
+          <button onClick={saveProject}>Save project</button>
+        </div>
+        {projectError && <p className="error">{projectError}</p>}
 
         <fieldset>
           <legend>Box</legend>

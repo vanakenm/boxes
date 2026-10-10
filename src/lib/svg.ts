@@ -56,7 +56,11 @@ ${paths}
 }
 
 export function downloadSvg(content: string, filename: string) {
-  const url = URL.createObjectURL(new Blob([content], { type: 'image/svg+xml' }));
+  downloadFile(content, filename, 'image/svg+xml');
+}
+
+export function downloadFile(content: string, filename: string, type: string) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
